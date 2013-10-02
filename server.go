@@ -39,6 +39,7 @@ var (
 	typeOfError   = reflect.TypeOf((*error)(nil)).Elem() // Ripped from net/rpc
 )
 
+// NewServer returns a new Server.
 func NewServer() (s *Server) {
 	s = &Server{
 		Worker:     worker.New(worker.Unlimited),
@@ -46,12 +47,15 @@ func NewServer() (s *Server) {
 		serviceMap: make(map[string]*methodType),
 	}
 	s.Worker.JobHandler = func(j *worker.Job) (err error) {
-		logger.Info.Printf("Handling job!")
+		logger.Info.Printf("I'm never called :(")
 		return
 	}
 	return
 }
 
+// Adds Gearman server addresses to connect to. May be called multiple times.
+// A connection is made to each Gearman Job Server, errors may be thrown from
+// connectivity issues.
 func (s *Server) AddGearman(addrs ...string) (err error) {
 	for _, addr := range addrs {
 		if err = s.Worker.AddServer(addr); err != nil {
@@ -61,6 +65,15 @@ func (s *Server) AddGearman(addrs ...string) (err error) {
 	return
 }
 
+// Register publishes in the server the set of methods of the
+// receiver value that satisfy the following conditions:
+//	- exported method
+//	- two arguments, both pointers to exported structs
+//	- one return value, of type error
+// It returns an error if the receiver is not an exported type or has
+// no methods or unsuitable methods. It also logs the error using package log.
+// The client accesses each method using a string of the form "Type.Method",
+// where Type is the receiver's concrete type.
 func (s *Server) Register(rcvr interface{}) (err error) {
 	if err = s.server.Register(rcvr); err != nil {
 		return
@@ -69,6 +82,8 @@ func (s *Server) Register(rcvr interface{}) (err error) {
 	return
 }
 
+// RegisterName is like Register but uses the provided name for the type
+// instead of the receiver's concrete type.
 func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
 	if err = s.server.RegisterName(name, rcvr); err != nil {
 		return
@@ -76,6 +91,8 @@ func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
 	return s.addMethods(rcvr, name)
 }
 
+// Notifies all Gearman servers of the service methods available and begins
+// accepting jobs.
 func (s *Server) Serve() {
 	for name := range s.serviceMap {
 		s.Worker.AddFunc(name, s.handleJob, worker.Immediately)
