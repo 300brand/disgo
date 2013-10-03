@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jbaikge/logger"
+	"github.com/mikespook/gearman-go/common"
 	"github.com/mikespook/gearman-go/worker"
 	"net/rpc"
 	"reflect"
@@ -16,10 +17,12 @@ import (
 type NullType struct{}
 
 type Server struct {
-	Worker       *worker.Worker
-	serviceMutex sync.RWMutex
-	serviceMap   map[string]*methodType
-	server       *rpc.Server
+	ReconnectPause time.Duration
+	Worker         *worker.Worker
+	addrs          []string
+	serviceMutex   sync.RWMutex
+	serviceMap     map[string]*methodType
+	server         *rpc.Server
 }
 
 // Ripped directly from net/rpc package
@@ -40,27 +43,12 @@ var (
 )
 
 // NewServer returns a new Server.
-func NewServer() (s *Server) {
+func NewServer(addrs ...string) (s *Server) {
 	s = &Server{
-		Worker:     worker.New(worker.Unlimited),
-		server:     rpc.NewServer(),
-		serviceMap: make(map[string]*methodType),
-	}
-	s.Worker.JobHandler = func(j *worker.Job) (err error) {
-		logger.Info.Printf("I'm never called :(")
-		return
-	}
-	return
-}
-
-// Adds Gearman server addresses to connect to. May be called multiple times.
-// A connection is made to each Gearman Job Server, errors may be thrown from
-// connectivity issues.
-func (s *Server) AddGearman(addrs ...string) (err error) {
-	for _, addr := range addrs {
-		if err = s.Worker.AddServer(addr); err != nil {
-			return
-		}
+		ReconnectPause: 3 * time.Second,
+		server:         rpc.NewServer(),
+		addrs:          addrs,
+		serviceMap:     make(map[string]*methodType),
 	}
 	return
 }
@@ -91,13 +79,34 @@ func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
 	return s.addMethods(rcvr, name)
 }
 
-// Notifies all Gearman servers of the service methods available and begins
-// accepting jobs.
-func (s *Server) Serve() {
-	for name := range s.serviceMap {
-		s.Worker.AddFunc(name, s.handleJob, worker.Immediately)
+// Connects to all gearman addresses, then notifies all Gearman servers of the
+// service methods available and begins accepting jobs.
+func (s *Server) Serve() (err error) {
+	for {
+		s.Worker = worker.New(worker.Unlimited)
+		s.Worker.ErrHandler = s.errHandler
+		connected := 0
+		for _, addr := range s.addrs {
+			if err = s.Worker.AddServer(addr); err != nil {
+				logger.Warn.Printf("disgo: Could add server %s: %s", addr, err)
+				continue
+			}
+			connected++
+		}
+		// Couldn't find a server to connect to, wait and then try to reconnect
+		if connected == 0 {
+			logger.Error.Printf("disgo: Couldn't find any servers to connect to. Trying again in %s", s.ReconnectPause)
+			<-time.After(s.ReconnectPause)
+			continue
+		}
+		// Connected! Tell the job server we
+		for name := range s.serviceMap {
+			s.Worker.AddFunc(name, s.handleJob, worker.Immediately)
+		}
+		logger.Info.Print("disgo: Starting...")
+		s.Worker.Work()
 	}
-	s.Worker.Work()
+	return
 }
 
 // most checks omitted since rpc.Register does them for us
@@ -114,23 +123,34 @@ func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
 	// Extract exported methods
 	methods := suitableMethods(rcvr, true)
 	if len(methods) == 0 {
-		return fmt.Errorf("No exported methods found for %s", name)
+		return fmt.Errorf("disgo: No exported methods found for %s", name)
 	}
 	for mname, method := range methods {
 		fullname := fmt.Sprintf("%s.%s", name, mname)
 		if _, ok := s.serviceMap[fullname]; ok {
-			return fmt.Errorf("Service method already exists for %s", fullname)
+			return fmt.Errorf("disgo: Service method already exists for %s", fullname)
 		}
 		s.serviceMap[fullname] = method
 	}
 	return
 }
 
+func (s *Server) errHandler(err error) {
+	switch err {
+	case common.ErrConnection:
+		logger.Error.Printf("disgo: Connection Error. Restarting in %s", s.ReconnectPause)
+		<-time.After(s.ReconnectPause)
+		s.Worker.Close()
+	default:
+		logger.Error.Print(err)
+	}
+}
+
 func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
-	logger.Debug.Printf("handling %s", job.Fn)
+	logger.Debug.Printf("disgo: New Job: %s %s", job.Fn, job.Handle)
 	method, ok := s.serviceMap[job.Fn]
 	if !ok {
-		err = fmt.Errorf("Invalid service method: %s", job.Fn)
+		err = fmt.Errorf("disgo: Invalid service method: %s", job.Fn)
 		logger.Error.Print(err)
 		return
 	}
