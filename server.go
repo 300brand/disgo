@@ -103,7 +103,7 @@ func (s *Server) Serve() (err error) {
 		for name := range s.serviceMap {
 			s.Worker.AddFunc(name, s.handleJob, worker.Immediately)
 		}
-		logger.Info.Print("disgo: Starting...")
+		logger.Trace.Print("disgo: Starting...")
 		s.Worker.Work()
 	}
 	return
@@ -147,7 +147,7 @@ func (s *Server) errHandler(err error) {
 }
 
 func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
-	logger.Debug.Printf("disgo: New Job: %s %s", job.Fn, job.Handle)
+	logger.Trace.Printf("disgo: New Job: %s %s", job.Fn, job.Handle)
 	method, ok := s.serviceMap[job.Fn]
 	if !ok {
 		err = fmt.Errorf("disgo: Invalid service method: %s", job.Fn)
@@ -184,7 +184,7 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	start := time.Now()
 	ret := method.method.Func.Call([]reflect.Value{method.rcvr, arg, reply})
 	took := time.Since(start)
-	logger.Info.Printf("disgo: %s took %s", job.Fn, took)
+	logger.Debug.Printf("disgo: %s took %s", job.Fn, took)
 
 	// error is the only return
 	if i := ret[0].Interface(); i != nil {
