@@ -6,7 +6,6 @@ import (
 	"github.com/jbaikge/logger"
 	"github.com/mikespook/gearman-go/common"
 	"github.com/mikespook/gearman-go/worker"
-	"net/rpc"
 	"reflect"
 	"sync"
 	"time"
@@ -22,7 +21,6 @@ type Server struct {
 	addrs          []string
 	serviceMutex   sync.RWMutex
 	serviceMap     map[string]*methodType
-	server         *rpc.Server
 }
 
 // Ripped directly from net/rpc package
@@ -46,7 +44,6 @@ var (
 func NewServer(addrs ...string) (s *Server) {
 	s = &Server{
 		ReconnectPause: 3 * time.Second,
-		server:         rpc.NewServer(),
 		addrs:          addrs,
 		serviceMap:     make(map[string]*methodType),
 	}
@@ -63,19 +60,12 @@ func NewServer(addrs ...string) (s *Server) {
 // The client accesses each method using a string of the form "Type.Method",
 // where Type is the receiver's concrete type.
 func (s *Server) Register(rcvr interface{}) (err error) {
-	if err = s.server.Register(rcvr); err != nil {
-		return
-	}
-	s.addMethods(rcvr, "")
-	return
+	return s.addMethods(rcvr, "")
 }
 
 // RegisterName is like Register but uses the provided name for the type
 // instead of the receiver's concrete type.
 func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
-	if err = s.server.RegisterName(name, rcvr); err != nil {
-		return
-	}
 	return s.addMethods(rcvr, name)
 }
 
@@ -101,6 +91,7 @@ func (s *Server) Serve() (err error) {
 		}
 		// Connected! Tell the job server we
 		for name := range s.serviceMap {
+			logger.Trace.Printf("disgo: Adding function %s", name)
 			s.Worker.AddFunc(name, s.handleJob, worker.Immediately)
 		}
 		logger.Trace.Print("disgo: Starting...")
