@@ -36,7 +36,7 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 	for {
 		select {
 		case job := <-ch:
-			logger.Debug.Printf("Got job: %v", job.UniqueId)
+			logger.Debug.Printf("Got job: %s", handle)
 			return json.Unmarshal(job.Data, out)
 		case <-time.After(time.Second):
 			logger.Debug.Printf("Checking status of %s", handle)
