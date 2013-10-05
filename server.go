@@ -34,6 +34,8 @@ type methodType struct {
 }
 
 var (
+	// Spits out errors when registering new services
+	DebugMode     = false
 	DefaultServer = NewServer()
 	Null          = new(NullType)
 	log           = logger.Error
@@ -112,7 +114,7 @@ func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
 	}
 
 	// Extract exported methods
-	methods := suitableMethods(rcvr, true)
+	methods := suitableMethods(rcvr)
 	if len(methods) == 0 {
 		return fmt.Errorf("disgo: No exported methods found for %s", name)
 	}
@@ -207,8 +209,8 @@ func isExportedOrBuiltinType(t reflect.Type) bool {
 
 // Ripped and modified from net/rpc
 // suitableMethods returns suitable Rpc methods of typ, it will report
-// error using log if reportErr is true.
-func suitableMethods(rcvr interface{}, reportErr bool) map[string]*methodType {
+// error using log if DebugMode is true.
+func suitableMethods(rcvr interface{}) map[string]*methodType {
 	methods := make(map[string]*methodType)
 	v := reflect.ValueOf(rcvr)
 	typ := reflect.TypeOf(rcvr)
@@ -222,7 +224,7 @@ func suitableMethods(rcvr interface{}, reportErr bool) map[string]*methodType {
 		}
 		// Method needs three ins: receiver, *args, *reply.
 		if mtype.NumIn() != 3 {
-			if reportErr {
+			if DebugMode {
 				log.Println("disgo: method", mname, "has wrong number of ins:", mtype.NumIn())
 			}
 			continue
@@ -230,7 +232,7 @@ func suitableMethods(rcvr interface{}, reportErr bool) map[string]*methodType {
 		// First arg need not be a pointer.
 		argType := mtype.In(1)
 		if !isExportedOrBuiltinType(argType) {
-			if reportErr {
+			if DebugMode {
 				log.Println("disgo:", mname, "argument type not exported:", argType)
 			}
 			continue
@@ -238,28 +240,28 @@ func suitableMethods(rcvr interface{}, reportErr bool) map[string]*methodType {
 		// Second arg must be a pointer.
 		replyType := mtype.In(2)
 		if replyType.Kind() != reflect.Ptr {
-			if reportErr {
+			if DebugMode {
 				log.Println("disgo: method", mname, "reply type not a pointer:", replyType)
 			}
 			continue
 		}
 		// Reply type must be exported.
 		if !isExportedOrBuiltinType(replyType) {
-			if reportErr {
+			if DebugMode {
 				log.Println("disgo: method", mname, "reply type not exported:", replyType)
 			}
 			continue
 		}
 		// Method needs one out.
 		if mtype.NumOut() != 1 {
-			if reportErr {
+			if DebugMode {
 				log.Println("disgo: method", mname, "has wrong number of outs:", mtype.NumOut())
 			}
 			continue
 		}
 		// The return type of the method must be error.
 		if returnType := mtype.Out(0); returnType != typeOfError {
-			if reportErr {
+			if DebugMode {
 				log.Println("disgo: method", mname, "returns", returnType.String(), "not error")
 			}
 			continue
