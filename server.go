@@ -80,23 +80,23 @@ func (s *Server) Serve() (err error) {
 		connected := 0
 		for _, addr := range s.addrs {
 			if err = s.Worker.AddServer(addr); err != nil {
-				logger.Warn.Printf("disgo: Could add server %s: %s", addr, err)
+				logger.Warn.Printf("disgo.Server: Could add server %s: %s", addr, err)
 				continue
 			}
 			connected++
 		}
 		// Couldn't find a server to connect to, wait and then try to reconnect
 		if connected == 0 {
-			logger.Error.Printf("disgo: Couldn't find any servers to connect to. Trying again in %s", s.ReconnectPause)
+			logger.Error.Printf("disgo.Server: Couldn't find any servers to connect to. Trying again in %s", s.ReconnectPause)
 			<-time.After(s.ReconnectPause)
 			continue
 		}
 		// Connected! Tell the job server we
 		for name := range s.serviceMap {
-			logger.Trace.Printf("disgo: Adding function %s", name)
-			s.Worker.AddFunc(name, s.handleJob, worker.Immediately)
+			logger.Trace.Printf("disgo.Server: Adding function %s", name)
+			s.Worker.AddFunc(name, s.handleJob, 30)
 		}
-		logger.Trace.Print("disgo: Starting...")
+		logger.Trace.Print("disgo.Server: Starting...")
 		s.Worker.Work()
 	}
 	return
@@ -116,12 +116,12 @@ func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
 	// Extract exported methods
 	methods := suitableMethods(rcvr)
 	if len(methods) == 0 {
-		return fmt.Errorf("disgo: No exported methods found for %s", name)
+		return fmt.Errorf("disgo.Server: No exported methods found for %s", name)
 	}
 	for mname, method := range methods {
 		fullname := fmt.Sprintf("%s.%s", name, mname)
 		if _, ok := s.serviceMap[fullname]; ok {
-			return fmt.Errorf("disgo: Service method already exists for %s", fullname)
+			return fmt.Errorf("disgo.Server: Service method already exists for %s", fullname)
 		}
 		s.serviceMap[fullname] = method
 	}
@@ -131,7 +131,7 @@ func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
 func (s *Server) errHandler(err error) {
 	switch err {
 	case common.ErrConnection:
-		logger.Error.Printf("disgo: Connection Error. Restarting in %s", s.ReconnectPause)
+		logger.Error.Printf("disgo.Server: Connection Error. Restarting in %s", s.ReconnectPause)
 		<-time.After(s.ReconnectPause)
 		s.Worker.Close()
 	default:
@@ -140,10 +140,10 @@ func (s *Server) errHandler(err error) {
 }
 
 func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
-	logger.Trace.Printf("disgo: New Job: %s %s", job.Fn, job.Handle)
+	logger.Trace.Printf("disgo.Server: [%s] HNDL %s", job.Fn, job.Handle)
 	method, ok := s.serviceMap[job.Fn]
 	if !ok {
-		err = fmt.Errorf("disgo: Invalid service method: %s", job.Fn)
+		err = fmt.Errorf("disgo.Server: Invalid service method: %s", job.Fn)
 		logger.Error.Print(err)
 		return
 	}
@@ -177,16 +177,19 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	start := time.Now()
 	ret := method.method.Func.Call([]reflect.Value{method.rcvr, arg, reply})
 	took := time.Since(start)
-	logger.Debug.Printf("disgo: %s took %s", job.Fn, took)
+	logger.Debug.Printf("disgo.Server: [%s] TOOK %s %s", job.Fn, job.Handle, took)
+
+	response := new(ResponseToClient)
 
 	// error is the only return
 	if i := ret[0].Interface(); i != nil {
-		err = i.(error)
-		logger.Error.Print(err)
-		return
+		response.Error = i
 	}
+	response.Result = reply.Interface()
 
-	return json.Marshal(reply.Interface())
+	data, err = json.Marshal(response)
+	logger.Trace.Printf("disgo.Server: [%s] SEND %s %s", job.Fn, job.Handle, data)
+	return
 }
 
 // Ripped from net/rpc
@@ -225,7 +228,7 @@ func suitableMethods(rcvr interface{}) map[string]*methodType {
 		// Method needs three ins: receiver, *args, *reply.
 		if mtype.NumIn() != 3 {
 			if DebugMode {
-				log.Println("disgo: method", mname, "has wrong number of ins:", mtype.NumIn())
+				log.Println("disgo.Server: method", mname, "has wrong number of ins:", mtype.NumIn())
 			}
 			continue
 		}
@@ -233,7 +236,7 @@ func suitableMethods(rcvr interface{}) map[string]*methodType {
 		argType := mtype.In(1)
 		if !isExportedOrBuiltinType(argType) {
 			if DebugMode {
-				log.Println("disgo:", mname, "argument type not exported:", argType)
+				log.Println("disgo.Server:", mname, "argument type not exported:", argType)
 			}
 			continue
 		}
@@ -241,28 +244,28 @@ func suitableMethods(rcvr interface{}) map[string]*methodType {
 		replyType := mtype.In(2)
 		if replyType.Kind() != reflect.Ptr {
 			if DebugMode {
-				log.Println("disgo: method", mname, "reply type not a pointer:", replyType)
+				log.Println("disgo.Server: method", mname, "reply type not a pointer:", replyType)
 			}
 			continue
 		}
 		// Reply type must be exported.
 		if !isExportedOrBuiltinType(replyType) {
 			if DebugMode {
-				log.Println("disgo: method", mname, "reply type not exported:", replyType)
+				log.Println("disgo.Server: method", mname, "reply type not exported:", replyType)
 			}
 			continue
 		}
 		// Method needs one out.
 		if mtype.NumOut() != 1 {
 			if DebugMode {
-				log.Println("disgo: method", mname, "has wrong number of outs:", mtype.NumOut())
+				log.Println("disgo.Server: method", mname, "has wrong number of outs:", mtype.NumOut())
 			}
 			continue
 		}
 		// The return type of the method must be error.
 		if returnType := mtype.Out(0); returnType != typeOfError {
 			if DebugMode {
-				log.Println("disgo: method", mname, "returns", returnType.String(), "not error")
+				log.Println("disgo.Server: method", mname, "returns", returnType.String(), "not error")
 			}
 			continue
 		}

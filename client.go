@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/jbaikge/logger"
 	"github.com/mikespook/gearman-go/client"
+	"math/rand"
 	"time"
 )
 
@@ -13,13 +14,8 @@ type Client struct {
 }
 
 func NewClient(addrs ...string) *Client {
-	c, err := client.New(addrs[0])
-	if err != nil {
-		logger.Error.Printf("NewClient err: %s", err)
-	}
 	return &Client{
-		addrs:  addrs,
-		client: c,
+		addrs: addrs,
 	}
 }
 
@@ -29,22 +25,45 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 		return
 	}
 
+	start := time.Now()
+
+	cl, err := c.connect()
+	if err != nil {
+		return
+	}
+	defer cl.Close()
+
 	ch := make(chan *client.Job, 1)
-	handle := c.client.Do(f, data, client.JOB_NORMAL, func(j *client.Job) { ch <- j })
-	logger.Debug.Printf("%s handle: %s", f, handle)
+	logger.Trace.Printf("disgo.Client: [%s] SEND %s", f, data)
+
+	handle := cl.Do(f, data, client.JOB_NORMAL, func(j *client.Job) { ch <- j; close(ch) })
+
+	logger.Debug.Printf("disgo.Client: [%s] HNDL %s", f, handle)
+
+	defer func(f, h string) {
+		logger.Trace.Printf("disgo.Client: [%s] DONE %s %s", f, h, time.Since(start))
+	}(f, handle)
 
 	for {
 		select {
 		case job := <-ch:
-			logger.Trace.Printf("Got job: %s", handle)
-			return json.Unmarshal(job.Data, out)
-		case <-time.After(time.Second):
-			logger.Trace.Printf("Checking status of %s", handle)
-			status, err := c.client.Status(handle, time.Second)
-			if err != nil {
+			logger.Trace.Printf("disgo.Client: [%s] RECV %s %s", f, handle, job.Data)
+			response := new(ResponseFromServer)
+			if err = json.Unmarshal(job.Data, response); err != nil {
+				logger.Error.Printf("disgo.Client: Unmarshal Error: %s", err)
+				return
+			}
+			if err, ok := response.Error.(error); ok && err != nil {
 				return err
 			}
-			logger.Debug.Printf("%s running: %v", handle, status.Running)
+			return json.Unmarshal(*response.Result, out)
+		case <-time.After(2 * time.Second):
+			// status, err := c.client.Status(handle, 0)
+			// if err != nil {
+			// 	logger.Error.Printf("disgo.Client: [%s] (%s) Error checking status on %s: %s", f, time.Since(start), handle, err)
+			// 	return err
+			// }
+			logger.Trace.Printf("disgo.Client [%s] RUNG %s", f, handle)
 		}
 	}
 	return
@@ -52,6 +71,16 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 
 func (c *Client) Close() error {
 	return c.client.Close()
+}
+
+func (c *Client) connect() (cl *client.Client, err error) {
+	for i := range rand.Perm(len(c.addrs)) {
+		logger.Trace.Printf("disgo.Client: Connecting to %s", c.addrs[i])
+		if cl, err = client.New(c.addrs[i]); err == nil {
+			break
+		}
+	}
+	return
 }
 
 func (c *Client) handler(job *client.Job) {
