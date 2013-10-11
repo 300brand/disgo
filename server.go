@@ -94,7 +94,7 @@ func (s *Server) Serve() (err error) {
 		// Connected! Tell the job server we
 		for name := range s.serviceMap {
 			logger.Trace.Printf("disgo.Server: Adding function %s", name)
-			s.Worker.AddFunc(name, s.handleJob, 30)
+			s.Worker.AddFunc(name, s.handleJob, 0)
 		}
 		logger.Trace.Print("disgo.Server: Starting...")
 		s.Worker.Work()
@@ -134,6 +134,8 @@ func (s *Server) errHandler(err error) {
 		logger.Error.Printf("disgo.Server: Connection Error. Restarting in %s", s.ReconnectPause)
 		<-time.After(s.ReconnectPause)
 		s.Worker.Close()
+	case common.ErrTimeOut:
+		logger.Error.Printf("disgo.Server: Timeout reached.")
 	default:
 		logger.Error.Print(err)
 	}
@@ -159,6 +161,7 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	}
 	// arg guaranteed to be a pointer now.
 	if err = json.Unmarshal(job.Data, arg.Interface()); err != nil {
+		logger.Error.Printf("disgo.Server: [%s] %s Arg unmarshal error: %s; Data was: %s", job.Fn, job.Handle, err, job.Data)
 		return
 	}
 	// Return to a value if it's expected
@@ -189,6 +192,7 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 
 	data, err = json.Marshal(response)
 	logger.Trace.Printf("disgo.Server: [%s] SEND %s %s", job.Fn, job.Handle, data)
+	data = append(data, '\n')
 	return
 }
 

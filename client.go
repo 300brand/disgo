@@ -5,6 +5,7 @@ import (
 	"github.com/jbaikge/logger"
 	"github.com/mikespook/gearman-go/client"
 	"math/rand"
+	"reflect"
 	"time"
 )
 
@@ -12,6 +13,8 @@ type Client struct {
 	addrs  []string
 	client *client.Client
 }
+
+var rNullType = reflect.TypeOf(Null)
 
 func NewClient(addrs ...string) *Client {
 	return &Client{
@@ -34,9 +37,14 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 	defer cl.Close()
 
 	ch := make(chan *client.Job, 1)
-	logger.Trace.Printf("disgo.Client: [%s] SEND %s", f, data)
+	logger.Trace.Printf("disgo.Client: [%s] SEND", f)
 
-	handle := cl.Do(f, data, client.JOB_NORMAL, func(j *client.Job) { ch <- j; close(ch) })
+	var flag byte = client.JOB_NORMAL
+	if reflect.TypeOf(out).ConvertibleTo(rNullType) {
+		flag |= client.JOB_BG
+	}
+
+	handle := cl.Do(f, data, flag, func(j *client.Job) { ch <- j; close(ch) })
 
 	logger.Debug.Printf("disgo.Client: [%s] HNDL %s", f, handle)
 
@@ -47,7 +55,7 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 	for {
 		select {
 		case job := <-ch:
-			logger.Trace.Printf("disgo.Client: [%s] RECV %s %s", f, handle, job.Data)
+			logger.Trace.Printf("disgo.Client: [%s] RECV %s", f, handle)
 			response := new(ResponseFromServer)
 			if err = json.Unmarshal(job.Data, response); err != nil {
 				logger.Error.Printf("disgo.Client: Unmarshal Error: %s", err)
