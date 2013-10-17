@@ -3,7 +3,7 @@ package disgo
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/jbaikge/logger"
+	"github.com/300brand/logger"
 	"github.com/mikespook/gearman-go/common"
 	"github.com/mikespook/gearman-go/worker"
 	"reflect"
