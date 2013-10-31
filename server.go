@@ -191,7 +191,7 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	response.Result = reply.Interface()
 
 	data, err = json.Marshal(response)
-	logger.Trace.Printf("disgo.Server: [%s] SEND %s %s", job.Fn, job.Handle, data)
+	logger.Trace.Printf("disgo.Server: [%s] SEND %s %0.64s", job.Fn, job.Handle, data)
 	data = append(data, '\n')
 	return
 }
