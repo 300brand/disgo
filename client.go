@@ -14,7 +14,10 @@ type Client struct {
 	client *client.Client
 }
 
-var rNullType = reflect.TypeOf(Null)
+var (
+	connections = make(chan bool, 128) // Max outbound connections to gearman
+	rNullType   = reflect.TypeOf(Null)
+)
 
 func NewClient(addrs ...string) *Client {
 	return &Client{
@@ -29,6 +32,11 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 	}
 
 	start := time.Now()
+
+	connections <- true
+	defer func() {
+		<-connections
+	}()
 
 	cl, err := c.connect()
 	if err != nil {
