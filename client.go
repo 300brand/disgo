@@ -90,7 +90,7 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) connect() (cl *client.Client, err error) {
-	for i := range rand.Perm(len(c.addrs)) {
+	for _, i := range rand.Perm(len(c.addrs)) {
 		logger.Trace.Printf("disgo.Client: Connecting to %s", c.addrs[i])
 		if cl, err = client.New(c.addrs[i]); err == nil {
 			break
