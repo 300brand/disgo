@@ -185,8 +185,14 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	response := new(ResponseToClient)
 
 	// error is the only return
+	// Cast to a string to send over the transport where the client will pick it
+	// up and re-cast to an error for the caller's sake.
 	if i := ret[0].Interface(); i != nil {
-		response.Error = i
+		if v, ok := i.(error); ok {
+			response.Error = v.Error()
+		} else {
+			response.Error = fmt.Sprint(i)
+		}
 	}
 	response.Result = reply.Interface()
 

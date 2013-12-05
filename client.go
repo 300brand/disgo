@@ -2,6 +2,7 @@ package disgo
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/300brand/logger"
 	"github.com/mikespook/gearman-go/client"
 	"math/rand"
@@ -69,8 +70,8 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 				logger.Error.Printf("disgo.Client: Unmarshal Error: %s", err)
 				return
 			}
-			if err, ok := response.Error.(error); ok && err != nil {
-				return err
+			if respErr := response.Error; respErr != nil {
+				return fmt.Errorf("%s", respErr)
 			}
 			return json.Unmarshal(*response.Result, out)
 		case <-time.After(2 * time.Second):
