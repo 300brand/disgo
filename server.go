@@ -96,6 +96,9 @@ func (s *Server) Serve() (err error) {
 			s.Worker.AddFunc(name, s.handleJob, 0)
 		}
 		logger.Trace.Print("disgo.Server: Starting...")
+		if err = s.Worker.Ready(); err != nil {
+			return
+		}
 		s.Worker.Work()
 	}
 	return
