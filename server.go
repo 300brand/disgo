@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/300brand/logger"
-	"github.com/mikespook/gearman-go/common"
 	"github.com/mikespook/gearman-go/worker"
 	"reflect"
 	"sync"
@@ -130,11 +129,11 @@ func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
 
 func (s *Server) errHandler(err error) {
 	switch err {
-	case common.ErrConnection:
+	case worker.ErrConnection:
 		logger.Error.Printf("disgo.Server: Connection Error. Restarting in %s", s.ReconnectPause)
 		<-time.After(s.ReconnectPause)
 		s.Worker.Close()
-	case common.ErrTimeOut:
+	case worker.ErrTimeOut:
 		logger.Error.Printf("disgo.Server: Timeout reached.")
 	default:
 		logger.Error.Print(err)
