@@ -75,10 +75,10 @@ func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
 func (s *Server) Serve() (err error) {
 	for {
 		s.Worker = worker.New(worker.Unlimited)
-		s.Worker.ErrHandler = s.errHandler
+		s.Worker.ErrorHandler = s.errHandler
 		connected := 0
 		for _, addr := range s.addrs {
-			if err = s.Worker.AddServer(addr); err != nil {
+			if err = s.Worker.AddServer(worker.Network, addr); err != nil {
 				logger.Warn.Printf("disgo.Server: Could add server %s: %s", addr, err)
 				continue
 			}
@@ -129,7 +129,7 @@ func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
 
 func (s *Server) errHandler(err error) {
 	switch err {
-	case worker.ErrConnection:
+	case worker.ErrLostConn:
 		logger.Error.Printf("disgo.Server: Connection Error. Restarting in %s", s.ReconnectPause)
 		<-time.After(s.ReconnectPause)
 		s.Worker.Close()
@@ -140,11 +140,11 @@ func (s *Server) errHandler(err error) {
 	}
 }
 
-func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
-	logger.Trace.Printf("disgo.Server: [%s] HNDL %s", job.Fn, job.Handle)
-	method, ok := s.serviceMap[job.Fn]
+func (s *Server) handleJob(job worker.Job) (data []byte, err error) {
+	logger.Trace.Printf("disgo.Server: [%s] HNDL %s", job.Fn(), job.Handle())
+	method, ok := s.serviceMap[job.Fn()]
 	if !ok {
-		err = fmt.Errorf("disgo.Server: Invalid service method: %s", job.Fn)
+		err = fmt.Errorf("disgo.Server: Invalid service method: %s", job.Fn())
 		logger.Error.Print(err)
 		return
 	}
@@ -159,8 +159,8 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 		argIsValue = true
 	}
 	// arg guaranteed to be a pointer now.
-	if err = json.Unmarshal(job.Data, arg.Interface()); err != nil {
-		logger.Error.Printf("disgo.Server: [%s] %s Arg unmarshal error: %s; Data was: %s", job.Fn, job.Handle, err, job.Data)
+	if err = json.Unmarshal(job.Data(), arg.Interface()); err != nil {
+		logger.Error.Printf("disgo.Server: [%s] %s Arg unmarshal error: %s; Data was: %s", job.Fn(), job.Handle(), err, job.Data)
 		return
 	}
 	// Return to a value if it's expected
@@ -179,7 +179,7 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	start := time.Now()
 	ret := method.method.Func.Call([]reflect.Value{method.rcvr, arg, reply})
 	took := time.Since(start)
-	logger.Debug.Printf("disgo.Server: [%s] TOOK %s %s", job.Fn, job.Handle, took)
+	logger.Debug.Printf("disgo.Server: [%s] TOOK %s %s", job.Fn(), job.Handle(), took)
 
 	response := new(ResponseToClient)
 
@@ -196,7 +196,7 @@ func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
 	response.Result = reply.Interface()
 
 	data, err = json.Marshal(response)
-	logger.Trace.Printf("disgo.Server: [%s] SEND %s %0.64s", job.Fn, job.Handle, data)
+	logger.Trace.Printf("disgo.Server: [%s] SEND %s %0.64s", job.Fn(), job.Handle(), data)
 	data = append(data, '\n')
 	return
 }
