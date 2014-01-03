@@ -45,15 +45,18 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 	}
 	defer cl.Close()
 
-	ch := make(chan *client.Job, 1)
+	ch := make(chan *client.Response, 1)
 	logger.Trace.Printf("disgo.Client: [%s] SEND", f)
 
-	var flag byte = client.JOB_NORMAL
+	var flag byte = client.JobNormal
 	if reflect.TypeOf(out).ConvertibleTo(rNullType) {
-		flag |= client.JOB_BG
+		flag |= client.JobBg
 	}
 
-	handle := cl.Do(f, data, flag, func(j *client.Job) { ch <- j; close(ch) })
+	handle, err := cl.Do(f, data, flag, func(r *client.Response) { ch <- r; close(ch) })
+	if err != nil {
+		return
+	}
 
 	logger.Debug.Printf("disgo.Client: [%s] HNDL %s", f, handle)
 
@@ -63,10 +66,10 @@ func (c *Client) Call(f string, in, out interface{}) (err error) {
 
 	for {
 		select {
-		case job := <-ch:
+		case resp := <-ch:
 			logger.Trace.Printf("disgo.Client: [%s] RECV %s", f, handle)
 			response := new(ResponseFromServer)
-			if err = json.Unmarshal(job.Data, response); err != nil {
+			if err = json.Unmarshal(resp.Data, response); err != nil {
 				logger.Error.Printf("disgo.Client: Unmarshal Error: %s", err)
 				return
 			}
@@ -93,13 +96,13 @@ func (c *Client) Close() error {
 func (c *Client) connect() (cl *client.Client, err error) {
 	for _, i := range rand.Perm(len(c.addrs)) {
 		logger.Trace.Printf("disgo.Client: Connecting to %s", c.addrs[i])
-		if cl, err = client.New(c.addrs[i]); err == nil {
+		if cl, err = client.New(client.Network, c.addrs[i]); err == nil {
 			break
 		}
 	}
 	return
 }
 
-func (c *Client) handler(job *client.Job) {
-	logger.Debug.Printf("Client handler! %+v", job)
+func (c *Client) handler(r *client.Response) {
+	logger.Debug.Printf("Client handler! %+v", r)
 }
