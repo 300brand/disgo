@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/300brand/logger"
-	"github.com/mikespook/gearman-go/client"
+	"github.com/300brand/gearman-go/client"
 	"math/rand"
 	"reflect"
 	"time"
