@@ -1,285 +1,130 @@
 package disgo
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"github.com/300brand/logger"
-	"github.com/300brand/gearman-go/common"
-	"github.com/300brand/gearman-go/worker"
-	"reflect"
-	"sync"
+	"github.com/kr/beanstalk"
+	"net"
+	"net/http"
+	"net/rpc"
+	"net/rpc/jsonrpc"
 	"time"
-	"unicode"
-	"unicode/utf8"
 )
-
-type NullType struct{}
 
 type Server struct {
-	ReconnectPause time.Duration
-	Worker         *worker.Worker
-	addrs          []string
-	serviceMutex   sync.RWMutex
-	serviceMap     map[string]*methodType
+	conn  *beanstalk.Conn
+	names []string
+	gob   *rpc.Server
+	json  *rpc.Server
 }
 
-// Ripped directly from net/rpc package
-type methodType struct {
-	sync.Mutex // protects counters
-	rcvr       reflect.Value
-	method     reflect.Method
-	ArgType    reflect.Type
-	ReplyType  reflect.Type
-	numCalls   uint
-}
+const longDur = 100 * 365 * 24 * time.Hour
 
-var (
-	// Spits out errors when registering new services
-	DebugMode     = false
-	DefaultServer = NewServer()
-	Null          = new(NullType)
-	log           = logger.Error
-	typeOfError   = reflect.TypeOf((*error)(nil)).Elem() // Ripped from net/rpc
-)
-
-// NewServer returns a new Server.
-func NewServer(addrs ...string) (s *Server) {
+func NewServer(addr string) (s *Server, err error) {
 	s = &Server{
-		ReconnectPause: 3 * time.Second,
-		addrs:          addrs,
-		serviceMap:     make(map[string]*methodType),
+		gob:   rpc.NewServer(),
+		json:  rpc.NewServer(),
+		names: make([]string, 0, 64),
 	}
+	s.gob.HandleHTTP("/gob/rpc", "/gob/debug")
+	s.json.HandleHTTP("/json/rpc", "/json/debug")
+	s.conn, err = beanstalk.Dial("tcp", addr)
 	return
 }
 
-// Register publishes in the server the set of methods of the
-// receiver value that satisfy the following conditions:
-//	- exported method
-//	- two arguments, both pointers to exported structs
-//	- one return value, of type error
-// It returns an error if the receiver is not an exported type or has
-// no methods or unsuitable methods. It also logs the error using package log.
-// The client accesses each method using a string of the form "Type.Method",
-// where Type is the receiver's concrete type.
-func (s *Server) Register(rcvr interface{}) (err error) {
-	return s.addMethods(rcvr, "")
-}
-
-// RegisterName is like Register but uses the provided name for the type
-// instead of the receiver's concrete type.
 func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
-	return s.addMethods(rcvr, name)
+	if err = s.gob.RegisterName(name, rcvr); err != nil {
+		return
+	}
+	if err = s.json.RegisterName(name, rcvr); err != nil {
+		return
+	}
+	s.names = append(s.names, name)
+	return
 }
 
-// Connects to all gearman addresses, then notifies all Gearman servers of the
-// service methods available and begins accepting jobs.
 func (s *Server) Serve() (err error) {
+	httpAddr, gobAddr, jsonAddr := listeners(10000)
+	// Pre-cast addresses to []byte for transport
+	httpBytes := []byte(httpAddr.Addr().String())
+	gobBytes := []byte(gobAddr.Addr().String())
+	jsonBytes := []byte(jsonAddr.Addr().String())
+
+	// Listen for HTTP requests
+	go http.Serve(httpAddr, nil)
+	go s.gob.Accept(gobAddr)
+	go s.acceptJSON(jsonAddr)
+
+	requestTube := beanstalk.NewTubeSet(s.conn, s.names...)
+
+	var rpcAddr []byte
 	for {
-		s.Worker = worker.New(worker.Unlimited)
-		s.Worker.ErrHandler = s.errHandler
-		connected := 0
-		for _, addr := range s.addrs {
-			if err = s.Worker.AddServer(addr); err != nil {
-				logger.Warn.Printf("disgo.Server: Could add server %s: %s", addr, err)
-				continue
-			}
-			connected++
-		}
-		// Couldn't find a server to connect to, wait and then try to reconnect
-		if connected == 0 {
-			logger.Error.Printf("disgo.Server: Couldn't find any servers to connect to. Trying again in %s", s.ReconnectPause)
-			<-time.After(s.ReconnectPause)
+		requestId, req, err := requestTube.Reserve(longDur)
+		if err != nil {
+			logger.Error.Printf("Error reading from requestTube: %s", err)
 			continue
 		}
-		// Connected! Tell the job server we
-		for name := range s.serviceMap {
-			logger.Trace.Printf("disgo.Server: Adding function %s", name)
-			s.Worker.AddFunc(name, s.handleJob, 0)
+		rpcType, serviceName := req[:4], req[4:]
+		switch {
+		case bytes.Equal(RPCGOB, rpcType):
+			rpcAddr = gobBytes
+		case bytes.Equal(RPCJSON, rpcType):
+			rpcAddr = jsonBytes
+		case bytes.Equal(RPCHTTP, rpcType):
+			rpcAddr = httpBytes
+		default:
+			rpcAddr = []byte(`invalid`)
 		}
-		logger.Trace.Print("disgo.Server: Starting...")
-		s.Worker.Work()
+
+		// Generate name, hopefully matching the name of the tube the request
+		// came in on.
+		name := fmt.Sprintf("%s.%d", serviceName, requestId)
+		logger.Trace.Printf("Sending %s along %s", rpcAddr, name)
+
+		responseTube := beanstalk.Tube{Conn: s.conn, Name: name}
+
+		if _, err := responseTube.Put(rpcAddr, 1, 0, time.Minute); err != nil {
+			logger.Error.Printf("Error writing to responseTube: %s", err)
+			continue
+		}
+
+		// Remove request
+		requestTube.Conn.Delete(requestId)
 	}
+
 	return
 }
 
-// most checks omitted since rpc.Register does them for us
-func (s *Server) addMethods(rcvr interface{}, override string) (err error) {
-	s.serviceMutex.Lock()
-	defer s.serviceMutex.Unlock()
-
-	v := reflect.ValueOf(rcvr)
-	name := reflect.Indirect(v).Type().Name()
-	if override != "" {
-		name = override
-	}
-
-	// Extract exported methods
-	methods := suitableMethods(rcvr)
-	if len(methods) == 0 {
-		return fmt.Errorf("disgo.Server: No exported methods found for %s", name)
-	}
-	for mname, method := range methods {
-		fullname := fmt.Sprintf("%s.%s", name, mname)
-		if _, ok := s.serviceMap[fullname]; ok {
-			return fmt.Errorf("disgo.Server: Service method already exists for %s", fullname)
-		}
-		s.serviceMap[fullname] = method
-	}
-	return
+func (s *Server) Close() error {
+	return s.conn.Close()
 }
 
-func (s *Server) errHandler(err error) {
-	switch err {
-	case common.ErrConnection:
-		logger.Error.Printf("disgo.Server: Connection Error. Restarting in %s", s.ReconnectPause)
-		<-time.After(s.ReconnectPause)
-		s.Worker.Close()
-	case common.ErrTimeOut:
-		logger.Error.Printf("disgo.Server: Timeout reached.")
-	default:
-		logger.Error.Print(err)
+func (s *Server) acceptJSON(l net.Listener) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			logger.Error.Printf("Error accepting connection: %s", err)
+			continue
+		}
+		go s.json.ServeCodec(jsonrpc.NewServerCodec(conn))
 	}
 }
 
-func (s *Server) handleJob(job *worker.Job) (data []byte, err error) {
-	logger.Trace.Printf("disgo.Server: [%s] HNDL %s", job.Fn, job.Handle)
-	method, ok := s.serviceMap[job.Fn]
-	if !ok {
-		err = fmt.Errorf("disgo.Server: Invalid service method: %s", job.Fn)
-		logger.Error.Print(err)
-		return
-	}
-
-	// Decode the argument value.
-	var arg reflect.Value
-	argIsValue := false // if true, need to indirect before calling.
-	if method.ArgType.Kind() == reflect.Ptr {
-		arg = reflect.New(method.ArgType.Elem())
-	} else {
-		arg = reflect.New(method.ArgType)
-		argIsValue = true
-	}
-	// arg guaranteed to be a pointer now.
-	if err = json.Unmarshal(job.Data, arg.Interface()); err != nil {
-		logger.Error.Printf("disgo.Server: [%s] %s Arg unmarshal error: %s; Data was: %s", job.Fn, job.Handle, err, job.Data)
-		return
-	}
-	// Return to a value if it's expected
-	if argIsValue {
-		arg = arg.Elem()
-	}
-
-	// Prepare the reply value
-	reply := reflect.New(method.ReplyType.Elem())
-
-	method.Lock()
-	method.numCalls++
-	method.Unlock()
-
-	// Invoke!
-	start := time.Now()
-	ret := method.method.Func.Call([]reflect.Value{method.rcvr, arg, reply})
-	took := time.Since(start)
-	logger.Debug.Printf("disgo.Server: [%s] TOOK %s %s", job.Fn, job.Handle, took)
-
-	response := new(ResponseToClient)
-
-	// error is the only return
-	// Cast to a string to send over the transport where the client will pick it
-	// up and re-cast to an error for the caller's sake.
-	if i := ret[0].Interface(); i != nil {
-		if v, ok := i.(error); ok {
-			response.Error = v.Error()
-		} else {
-			response.Error = fmt.Sprint(i)
-		}
-	}
-	response.Result = reply.Interface()
-
-	data, err = json.Marshal(response)
-	logger.Trace.Printf("disgo.Server: [%s] SEND %s %0.64s", job.Fn, job.Handle, data)
-	data = append(data, '\n')
-	return
-}
-
-// Ripped from net/rpc
-// Is this an exported - upper case - name?
-func isExported(name string) bool {
-	rune, _ := utf8.DecodeRuneInString(name)
-	return unicode.IsUpper(rune)
-}
-
-// Ripped from net/rpc
-// Is this type exported or a builtin?
-func isExportedOrBuiltinType(t reflect.Type) bool {
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	// PkgPath will be non-empty even for an exported type,
-	// so we need to check the type name as well.
-	return isExported(t.Name()) || t.PkgPath() == ""
-}
-
-// Ripped and modified from net/rpc
-// suitableMethods returns suitable Rpc methods of typ, it will report
-// error using log if DebugMode is true.
-func suitableMethods(rcvr interface{}) map[string]*methodType {
-	methods := make(map[string]*methodType)
-	v := reflect.ValueOf(rcvr)
-	typ := reflect.TypeOf(rcvr)
-	for m := 0; m < typ.NumMethod(); m++ {
-		method := typ.Method(m)
-		mtype := method.Type
-		mname := method.Name
-		// Method must be exported.
-		if method.PkgPath != "" {
+func listeners(start int) (net.Listener, net.Listener, net.Listener) {
+	listeners := make(chan net.Listener, 3)
+	defer close(listeners)
+	var c int
+	for p := start; p < 65535 && c < 3; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
 			continue
 		}
-		// Method needs three ins: receiver, *args, *reply.
-		if mtype.NumIn() != 3 {
-			if DebugMode {
-				log.Println("disgo.Server: method", mname, "has wrong number of ins:", mtype.NumIn())
-			}
-			continue
-		}
-		// First arg need not be a pointer.
-		argType := mtype.In(1)
-		if !isExportedOrBuiltinType(argType) {
-			if DebugMode {
-				log.Println("disgo.Server:", mname, "argument type not exported:", argType)
-			}
-			continue
-		}
-		// Second arg must be a pointer.
-		replyType := mtype.In(2)
-		if replyType.Kind() != reflect.Ptr {
-			if DebugMode {
-				log.Println("disgo.Server: method", mname, "reply type not a pointer:", replyType)
-			}
-			continue
-		}
-		// Reply type must be exported.
-		if !isExportedOrBuiltinType(replyType) {
-			if DebugMode {
-				log.Println("disgo.Server: method", mname, "reply type not exported:", replyType)
-			}
-			continue
-		}
-		// Method needs one out.
-		if mtype.NumOut() != 1 {
-			if DebugMode {
-				log.Println("disgo.Server: method", mname, "has wrong number of outs:", mtype.NumOut())
-			}
-			continue
-		}
-		// The return type of the method must be error.
-		if returnType := mtype.Out(0); returnType != typeOfError {
-			if DebugMode {
-				log.Println("disgo.Server: method", mname, "returns", returnType.String(), "not error")
-			}
-			continue
-		}
-		methods[mname] = &methodType{rcvr: v, method: method, ArgType: argType, ReplyType: replyType}
+		c++
+		listeners <- l
 	}
-	return methods
+	if c != 3 {
+		panic("Could not listen on 3 ports!")
+	}
+	return <-listeners, <-listeners, <-listeners
 }

@@ -1,105 +1,58 @@
 package disgo
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/300brand/logger"
-	"github.com/300brand/gearman-go/client"
-	"math/rand"
-	"reflect"
+	"github.com/kr/beanstalk"
+	"net/rpc"
+	"strings"
 	"time"
 )
 
 type Client struct {
-	addrs  []string
-	client *client.Client
+	conn *beanstalk.Conn
 }
 
-var (
-	connections = make(chan bool, 128) // Max outbound connections to gearman
-	rNullType   = reflect.TypeOf(Null)
-)
-
-func NewClient(addrs ...string) *Client {
-	return &Client{
-		addrs: addrs,
-	}
-}
-
-func (c *Client) Call(f string, in, out interface{}) (err error) {
-	data, err := json.Marshal(in)
-	if err != nil {
-		return
-	}
-
-	start := time.Now()
-
-	connections <- true
-	defer func() {
-		<-connections
-	}()
-
-	cl, err := c.connect()
-	if err != nil {
-		return
-	}
-	defer cl.Close()
-
-	ch := make(chan *client.Job, 1)
-	logger.Trace.Printf("disgo.Client: [%s] SEND", f)
-
-	var flag byte = client.JOB_NORMAL
-	if reflect.TypeOf(out).ConvertibleTo(rNullType) {
-		flag |= client.JOB_BG
-	}
-
-	handle := cl.Do(f, data, flag, func(j *client.Job) { ch <- j; close(ch) })
-
-	logger.Debug.Printf("disgo.Client: [%s] HNDL %s", f, handle)
-
-	defer func(f, h string) {
-		logger.Trace.Printf("disgo.Client: [%s] DONE %s %s", f, h, time.Since(start))
-	}(f, handle)
-
-	for {
-		select {
-		case job := <-ch:
-			logger.Trace.Printf("disgo.Client: [%s] RECV %s", f, handle)
-			response := new(ResponseFromServer)
-			if err = json.Unmarshal(job.Data, response); err != nil {
-				logger.Error.Printf("disgo.Client: Unmarshal Error: %s", err)
-				return
-			}
-			if respErr := response.Error; respErr != nil {
-				return fmt.Errorf("%s", respErr)
-			}
-			return json.Unmarshal(*response.Result, out)
-		case <-time.After(2 * time.Second):
-			// status, err := c.client.Status(handle, 0)
-			// if err != nil {
-			// 	logger.Error.Printf("disgo.Client: [%s] (%s) Error checking status on %s: %s", f, time.Since(start), handle, err)
-			// 	return err
-			// }
-			logger.Trace.Printf("disgo.Client [%s] RUNG %s", f, handle)
-		}
-	}
+func NewClient(addr string) (c *Client, err error) {
+	c = new(Client)
+	c.conn, err = beanstalk.Dial("tcp", addr)
 	return
+}
+
+func (c *Client) Call(f string, args, reply interface{}) (err error) {
+	defer func(start time.Time) {
+		logger.Debug.Printf("disgo.Client [%s] took %s", f, time.Since(start))
+	}(time.Now())
+
+	serviceName := f[:strings.IndexByte(f, '.')]
+
+	// Request access to the GOB RPC handler
+	requestTube := beanstalk.Tube{Conn: c.conn, Name: serviceName}
+	requestId, err := requestTube.Put(append(RPCGOB, []byte(serviceName)...), 1, 0, 15*time.Minute)
+	if err != nil {
+		return
+	}
+
+	// Make a new tube [serviceName.requestId] to send the RPC address from
+	// server -> client
+	name := fmt.Sprintf("%s.%d", serviceName, requestId)
+	responseTube := beanstalk.NewTubeSet(c.conn, name)
+	responseId, addr, err := responseTube.Reserve(time.Minute)
+	if err != nil {
+		return
+	}
+	responseTube.Conn.Delete(responseId)
+
+	// Connect to the RPC handler and perform the action
+	client, err := rpc.Dial("tcp", string(addr))
+	if err != nil {
+		return
+	}
+	defer client.Close()
+
+	return client.Call(f, args, reply)
 }
 
 func (c *Client) Close() error {
-	return c.client.Close()
-}
-
-func (c *Client) connect() (cl *client.Client, err error) {
-	for _, i := range rand.Perm(len(c.addrs)) {
-		logger.Trace.Printf("disgo.Client: Connecting to %s", c.addrs[i])
-		if cl, err = client.New(c.addrs[i]); err == nil {
-			break
-		}
-	}
-	return
-}
-
-func (c *Client) handler(job *client.Job) {
-	logger.Debug.Printf("Client handler! %+v", job)
+	return c.conn.Close()
 }
