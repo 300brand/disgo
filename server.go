@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"net/rpc/jsonrpc"
+	"strconv"
 	"time"
 )
 
@@ -44,12 +45,12 @@ func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
 	return
 }
 
-func (s *Server) Serve() (err error) {
+func (s *Server) Serve(listenAddr string) (err error) {
 	if len(s.names) == 0 {
 		return fmt.Errorf("No services registered, nothing to serve.")
 	}
 
-	httpAddr, gobAddr, jsonAddr := listeners(10000)
+	httpAddr, gobAddr, jsonAddr := listeners(listenAddr)
 	// Pre-cast addresses to []byte for transport
 	httpBytes := []byte(httpAddr.Addr().String())
 	gobBytes := []byte(gobAddr.Addr().String())
@@ -115,12 +116,21 @@ func (s *Server) acceptJSON(l net.Listener) {
 	}
 }
 
-func listeners(start int) (net.Listener, net.Listener, net.Listener) {
+func listeners(listenAddr string) (net.Listener, net.Listener, net.Listener) {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		logger.Error.Fatal(err)
+	}
+	start, err := strconv.Atoi(port)
+	if err != nil {
+		logger.Error.Fatalf("Port is not numeric: %s", port)
+	}
+
 	listeners := make(chan net.Listener, 3)
 	defer close(listeners)
 	var c int
 	for p := start; p < 65535 && c < 3; p++ {
-		l, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, p))
 		if err != nil {
 			continue
 		}
