@@ -21,6 +21,7 @@ func NewClient(addr string) (c *Client, err error) {
 
 func (c *Client) Call(f string, args, reply interface{}) (err error) {
 	start := time.Now()
+	logger.Trace.Printf("disgo.Client: Calling %s", f)
 
 	serviceName := f[:strings.IndexByte(f, '.')]
 
