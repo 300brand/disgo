@@ -70,6 +70,7 @@ func (s *Server) Serve(listenAddr string) (err error) {
 			logger.Error.Printf("Error reading from requestTube: %s", err)
 			continue
 		}
+
 		rpcType, serviceName := req[:4], req[4:]
 		switch {
 		case bytes.Equal(RPCGOB, rpcType):
@@ -81,6 +82,10 @@ func (s *Server) Serve(listenAddr string) (err error) {
 		default:
 			rpcAddr = []byte(`invalid`)
 		}
+
+		defer func(start time.Time) {
+			logger.Debug.Printf("disgo.Server:%d %s for %s@%s took %s", requestId, rpcType, serviceName, rpcAddr, time.Since(start))
+		}(time.Now())
 
 		// Generate name, hopefully matching the name of the tube the request
 		// came in on.

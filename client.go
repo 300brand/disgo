@@ -20,9 +20,7 @@ func NewClient(addr string) (c *Client, err error) {
 }
 
 func (c *Client) Call(f string, args, reply interface{}) (err error) {
-	defer func(start time.Time) {
-		logger.Debug.Printf("disgo.Client [%s] took %s", f, time.Since(start))
-	}(time.Now())
+	start := time.Now()
 
 	serviceName := f[:strings.IndexByte(f, '.')]
 
@@ -49,6 +47,10 @@ func (c *Client) Call(f string, args, reply interface{}) (err error) {
 		return
 	}
 	defer client.Close()
+
+	defer func(start time.Time) {
+		logger.Debug.Printf("disgo.Client:%d %s@%s took %s", requestId, f, addr, time.Since(start))
+	}(start)
 
 	return client.Call(f, args, reply)
 }
