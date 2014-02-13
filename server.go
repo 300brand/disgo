@@ -45,6 +45,11 @@ func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
 }
 
 func (s *Server) Serve() (err error) {
+	if len(s.names) == 0 {
+		logger.Warn.Printf("No services registered, nothing to serve.")
+		return
+	}
+
 	httpAddr, gobAddr, jsonAddr := listeners(10000)
 	// Pre-cast addresses to []byte for transport
 	httpBytes := []byte(httpAddr.Addr().String())
