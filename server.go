@@ -26,6 +26,7 @@ const longDur = 100 * 365 * 24 * time.Hour
 func init() {
 	// Because sometimes you need a map of unknown things?
 	gob.Register(make(map[string]interface{}))
+	gob.Register([]interface{}(nil))
 }
 
 func NewServer(addr string) (s *Server, err error) {
