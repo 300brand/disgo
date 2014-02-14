@@ -2,6 +2,7 @@ package disgo
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"github.com/300brand/logger"
 	"github.com/kr/beanstalk"
@@ -21,6 +22,11 @@ type Server struct {
 }
 
 const longDur = 100 * 365 * 24 * time.Hour
+
+func init() {
+	// Because sometimes you need a map of unknown things?
+	gob.Register(make(map[string]interface{}))
+}
 
 func NewServer(addr string) (s *Server, err error) {
 	s = &Server{
