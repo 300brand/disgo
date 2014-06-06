@@ -1,6 +1,77 @@
 package disgo
 
 import (
+	"encoding/gob"
+	"fmt"
+	"github.com/300brand/logger"
+	"github.com/bitly/go-nsq"
+	"net/rpc"
+)
+
+type Server struct {
+	addr     string
+	config   *nsq.Config
+	gob      *rpc.Server
+	names    []string
+	producer *nsq.Producer
+}
+
+var _ nsq.Handler = new(Server)
+
+func init() {
+	// Because sometimes you need a map of unknown things?
+	gob.Register(make(map[string]interface{}))
+	gob.Register([]interface{}(nil))
+}
+
+func NewServer(addr string) (s *Server, err error) {
+
+	s = &Server{
+		addr:   addr,
+		config: nsq.NewConfig(),
+		gob:    rpc.NewServer(),
+		names:  make([]string, 0, 64),
+	}
+	s.config.Set("verbose", true)
+	s.producer = nsq.NewProducer(addr, s.config)
+	return
+}
+
+func (s *Server) Close() (err error) { return }
+
+func (s *Server) HandleMessage(m *nsq.Message) (err error) {
+	logger.Info.Printf("%+v", m.ID)
+	return
+}
+
+func (s *Server) RegisterName(name string, rcvr interface{}) (err error) {
+	if err = s.gob.RegisterName(name, rcvr); err != nil {
+		return
+	}
+	s.names = append(s.names, name)
+	return
+}
+
+func (s *Server) Serve(listenAddr string) (err error) {
+	if len(s.names) == 0 {
+		return fmt.Errorf("No services registered, nothing to serve.")
+	}
+	for _, name := range s.names {
+		consumer, err := nsq.NewConsumer(name, "disgo", s.config)
+		if err != nil {
+			return err
+		}
+		if err := consumer.ConnectToNSQLookupd(s.addr); err != nil {
+			return err
+		}
+		consumer.SetHandler(s)
+	}
+	select {}
+	return
+}
+
+/*
+import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
@@ -23,11 +94,6 @@ type Server struct {
 
 const longDur = 100 * 365 * 24 * time.Hour
 
-func init() {
-	// Because sometimes you need a map of unknown things?
-	gob.Register(make(map[string]interface{}))
-	gob.Register([]interface{}(nil))
-}
 
 func NewServer(addr string) (s *Server, err error) {
 	s = &Server{
@@ -153,3 +219,4 @@ func listeners(listenAddr string) (net.Listener, net.Listener, net.Listener) {
 	}
 	return <-listeners, <-listeners, <-listeners
 }
+*/

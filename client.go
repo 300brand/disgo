@@ -3,59 +3,54 @@ package disgo
 import (
 	"fmt"
 	"github.com/300brand/logger"
-	"github.com/kr/beanstalk"
+	"github.com/bitly/go-nsq"
 	"net/rpc"
-	"strings"
-	"time"
+	"os"
 )
 
 type Client struct {
-	conn *beanstalk.Conn
+	producer *nsq.Producer // nsq producer
+	ident    string        // ident for this specific client - a separate channel will be used
 }
 
 func NewClient(addr string) (c *Client, err error) {
+	config := nsq.NewConfig()
+	config.Set("verbose", true)
+
 	c = new(Client)
-	c.conn, err = beanstalk.Dial("tcp", addr)
+	c.producer = nsq.NewProducer(addr, config)
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		return
+	}
+	c.ident = fmt.Sprintf("%d-%d", hostname, os.Getpid())
 	return
 }
 
 func (c *Client) Call(f string, args, reply interface{}) (err error) {
-	start := time.Now()
-	logger.Trace.Printf("disgo.Client: Calling %s", f)
+	buf := new(Buffer)
+	client := rpc.NewClient(buf)
+	defer func() {
+		err := client.Close()
+		if err != nil {
+			logger.Error.Printf("Error closing client: %s", err)
+		}
+	}()
 
-	serviceName := f[:strings.IndexByte(f, '.')]
+	done := make(chan *rpc.Call, 1)
+	call := client.Go(f, args, reply, done)
 
-	// Request access to the GOB RPC handler
-	requestTube := beanstalk.Tube{Conn: c.conn, Name: serviceName}
-	requestId, err := requestTube.Put(append(RPCGOB, []byte(serviceName)...), 1, 0, 15*time.Minute)
-	if err != nil {
-		return
-	}
+	logger.Info.Printf("ServiceMethod: %s", call.ServiceMethod)
+	// Hijack the contents of the buffer and send as a message
+	logger.Info.Printf("Buffer Size: %d", buf.Len())
 
-	// Make a new tube [serviceName.requestId] to send the RPC address from
-	// server -> client
-	name := fmt.Sprintf("%s.%d", serviceName, requestId)
-	responseTube := beanstalk.NewTubeSet(c.conn, name)
-	responseId, addr, err := responseTube.Reserve(time.Minute)
-	if err != nil {
-		return
-	}
-	responseTube.Conn.Delete(responseId)
+	err = c.producer.Publish(f, buf.Bytes())
 
-	// Connect to the RPC handler and perform the action
-	client, err := rpc.Dial("tcp", string(addr))
-	if err != nil {
-		return
-	}
-	defer client.Close()
-
-	defer func(start time.Time) {
-		logger.Debug.Printf("disgo.Client:%d %s@%s took %s", requestId, f, addr, time.Since(start))
-	}(start)
-
-	return client.Call(f, args, reply)
+	return
 }
 
 func (c *Client) Close() error {
-	return c.conn.Close()
+	c.producer.Stop()
+	return nil
 }
