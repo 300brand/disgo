@@ -9,10 +9,11 @@ import (
 )
 
 type Server struct {
-	conn  *etcdConn
-	names []string
-	stops map[string]chan bool
-	gob   *rpc.Server
+	conn     *etcdConn
+	names    []string
+	stops    map[string]chan bool
+	stopChan chan bool
+	gob      *rpc.Server
 }
 
 func init() {
@@ -23,10 +24,11 @@ func init() {
 
 func NewServer(machineAddrs []string, broadcastAddr string) (s *Server, err error) {
 	s = &Server{
-		gob:   rpc.NewServer(),
-		names: make([]string, 0, 64),
-		stops: make(map[string]chan bool, 64),
-		conn:  newEtcdConn(machineAddrs, broadcastAddr),
+		gob:      rpc.NewServer(),
+		names:    make([]string, 0, 64),
+		stops:    make(map[string]chan bool, 64),
+		stopChan: make(chan bool),
+		conn:     newEtcdConn(machineAddrs, broadcastAddr),
 	}
 	return
 }
@@ -56,6 +58,7 @@ func (s *Server) Serve(listenAddr string) (err error) {
 		go s.conn.announce(name, s.stops[name])
 	}
 	logger.Debug.Printf("Ready to accept connections")
+	<-s.stopChan
 	return
 }
 
@@ -64,5 +67,6 @@ func (s *Server) Close() error {
 		logger.Debug.Printf("Stopping %s", name)
 		ch <- true
 	}
+	s.stopChan <- true
 	return nil
 }
