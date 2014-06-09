@@ -1,7 +1,6 @@
 package disgo
 
 import (
-	"fmt"
 	"github.com/300brand/logger"
 	"net/rpc"
 	"strings"
@@ -37,12 +36,12 @@ func (c *Client) Call(f string, args, reply interface{}) (err error) {
 	defer client.Close()
 
 	defer func(start time.Time) {
-		logger.Debug.Printf("disgo.Client:%d %s@%s took %s", requestId, f, addr, time.Since(start))
+		logger.Debug.Printf("disgo.Client:%s @ %s took %s", f, addr, time.Since(start))
 	}(start)
 
 	return client.Call(f, args, reply)
 }
 
 func (c *Client) Close() error {
-	return c.conn.Close()
+	return nil
 }
