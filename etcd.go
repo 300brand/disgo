@@ -18,8 +18,8 @@ type etcdConn struct {
 }
 
 const (
-	gobDir   = "/gobrpc/"
-	nodesDir = "/nodes/"
+	gobDir   = "/disgo/gobrpc/"
+	nodesDir = "/disgo/nodes/"
 )
 
 func newEtcdConn(machines []string, broadcastAddr string) (e *etcdConn) {
@@ -28,6 +28,7 @@ func newEtcdConn(machines []string, broadcastAddr string) (e *etcdConn) {
 		ttl:       2,
 	}
 	e.client = etcd.NewClient(machines)
+	rand.Seed(time.Now().UnixNano())
 	return
 }
 
@@ -85,6 +86,11 @@ func (e *etcdConn) machineName() string {
 		hostname = "unknown"
 	}
 
-	e.cachedName = fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), time.Now().Unix())
+	e.cachedName = fmt.Sprintf("%s-%d-%d-%04X",
+		hostname,
+		os.Getpid(),
+		time.Now().Unix(),
+		rand.Intn(0xFFFF),
+	)
 	return e.cachedName
 }
