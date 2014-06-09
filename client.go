@@ -11,6 +11,8 @@ type Client struct {
 	conn *etcdConn
 }
 
+var retryIncrement = 100 * time.Millisecond
+
 func NewClient(machineAddrs []string) (c *Client, err error) {
 	c = new(Client)
 	c.conn = newEtcdConn(machineAddrs, "")
@@ -19,11 +21,17 @@ func NewClient(machineAddrs []string) (c *Client, err error) {
 
 func (c *Client) Call(f string, args, reply interface{}) (err error) {
 	start := time.Now()
-	logger.Trace.Printf("disgo.Client: Calling %s", f)
-
 	serviceName := f[:strings.IndexByte(f, '.')]
 
-	addr, err := c.conn.getAddr(serviceName)
+	var addr string
+	for i := 0; i < 3; i++ {
+		if addr, err = c.conn.getAddr(serviceName); err == nil {
+			break
+		}
+		retryDuration := time.Duration(i+1) * retryIncrement
+		logger.Debug.Printf("No address for %s; waiting %s to retry", serviceName, retryDuration)
+		<-time.After(retryDuration)
+	}
 	if err != nil {
 		return
 	}
