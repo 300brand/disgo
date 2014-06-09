@@ -6,7 +6,6 @@ import (
 	"github.com/300brand/logger"
 	"net"
 	"net/rpc"
-	"strings"
 )
 
 type Server struct {
@@ -22,14 +21,13 @@ func init() {
 	gob.Register([]interface{}(nil))
 }
 
-func NewServer(machineAddrs, broadcastAddr string) (s *Server, err error) {
+func NewServer(machineAddrs []string, broadcastAddr string) (s *Server, err error) {
 	s = &Server{
 		gob:   rpc.NewServer(),
 		names: make([]string, 0, 64),
 		stops: make(map[string]chan bool, 64),
-		conn:  newEtcdConn(strings.Split(machineAddrs, ","), broadcastAddr),
+		conn:  newEtcdConn(machineAddrs, broadcastAddr),
 	}
-	s.gob.HandleHTTP("/gob/rpc", "/gob/debug")
 	return
 }
 
@@ -46,7 +44,7 @@ func (s *Server) Serve(listenAddr string) (err error) {
 		return fmt.Errorf("No services registered, nothing to serve.")
 	}
 
-	// Listen for HTTP requests
+	// Listen for requests
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return
