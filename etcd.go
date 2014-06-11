@@ -34,7 +34,7 @@ func newEtcdConn(machines []string, broadcastAddr string) (e *etcdConn) {
 
 func (e *etcdConn) announce(service string, stopChan chan bool) {
 	if err := e.register(service); err != nil {
-		logger.Warn.Printf("Error registering %s.%s: %s", service, err)
+		logger.Warn.Printf("Error registering %s: %s", service, err)
 	}
 	for {
 		select {
@@ -42,7 +42,7 @@ func (e *etcdConn) announce(service string, stopChan chan bool) {
 			return
 		case <-time.After(time.Duration(e.ttl)*time.Second - 50*time.Millisecond):
 			if err := e.register(service); err != nil {
-				logger.Warn.Printf("Error registering %s.%s: %s", service, err)
+				logger.Warn.Printf("Error registering %s: %s", service, err)
 			}
 		}
 	}
@@ -56,7 +56,7 @@ func (e *etcdConn) getAddr(service string) (addr string, err error) {
 
 	nodes := response.Node.Nodes
 	if len(nodes) == 0 {
-		err = fmt.Errorf("No machines registered for %s.%s", service)
+		err = fmt.Errorf("No machines registered for %s", service)
 		return
 	}
 	node := nodes[rand.Intn(len(nodes))]
@@ -69,7 +69,7 @@ func (e *etcdConn) getAddr(service string) (addr string, err error) {
 func (e *etcdConn) register(service string) (err error) {
 	_, err = e.client.Set(filepath.Join(gobDir, service, e.machineName()), e.broadcast, e.ttl)
 	if err != nil {
-		logger.Error.Print(err)
+		logger.Error.Printf("Error registering %s: %s", service, err)
 		return
 	}
 	_, err = e.client.Set(filepath.Join(nodesDir, e.machineName()), e.broadcast, e.ttl)
