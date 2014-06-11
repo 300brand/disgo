@@ -59,6 +59,7 @@ func (s *Server) Serve(listenAddr string) (err error) {
 	}
 	logger.Debug.Printf("Ready to accept connections")
 	<-s.stopChan
+	listener.Close()
 	return
 }
 
