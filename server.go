@@ -22,7 +22,7 @@ func init() {
 	gob.Register([]interface{}(nil))
 }
 
-func NewServer(machineAddrs []string, broadcastAddr string) (s *Server, err error) {
+func NewServer(machineAddrs []string, broadcastAddr string, ttl uint64) (s *Server, err error) {
 	s = &Server{
 		gob:      rpc.NewServer(),
 		names:    make([]string, 0, 64),
@@ -30,6 +30,7 @@ func NewServer(machineAddrs []string, broadcastAddr string) (s *Server, err erro
 		stopChan: make(chan bool),
 		conn:     newEtcdConn(machineAddrs, broadcastAddr),
 	}
+	s.conn.ttl = ttl
 	return
 }
 

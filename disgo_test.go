@@ -19,7 +19,7 @@ func (m *MathService) Square(a, b *N) (err error) {
 }
 
 func TestClientServer(t *testing.T) {
-	s, err := NewServer([]string{etcdAddr}, localBroadcastAddr)
+	s, err := NewServer([]string{etcdAddr}, localBroadcastAddr, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestClientMultiServer(t *testing.T) {
 	port, _ := strconv.Atoi(portStr)
 	for i := 0; i < 3; i++ {
 		listenAddr := net.JoinHostPort(host, strconv.Itoa(port+i))
-		s, err := NewServer([]string{etcdAddr}, listenAddr)
+		s, err := NewServer([]string{etcdAddr}, listenAddr, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
