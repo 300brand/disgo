@@ -29,7 +29,7 @@ func (c *Client) Call(f string, args, reply interface{}) (err error) {
 			break
 		}
 		retryDuration := time.Duration(i+1) * retryIncrement
-		logger.Debug.Printf("No address for %s; waiting %s to retry", serviceName, retryDuration)
+		logger.Debug.Printf("disgo.Client: No address for %s; waiting %s to retry", serviceName, retryDuration)
 		<-time.After(retryDuration)
 	}
 	if err != nil {
@@ -39,12 +39,13 @@ func (c *Client) Call(f string, args, reply interface{}) (err error) {
 	// Connect to the RPC handler and perform the action
 	client, err := rpc.Dial("tcp", addr)
 	if err != nil {
+		logger.Error.Printf("disgo.Client: Failed to rpc.Dial: %s", err)
 		return
 	}
 	defer client.Close()
 
 	defer func(start time.Time) {
-		logger.Debug.Printf("disgo.Client:%s @ %s took %s", f, addr, time.Since(start))
+		logger.Debug.Printf("disgo.Client: %s @ %s took %s", f, addr, time.Since(start))
 	}(start)
 
 	return client.Call(f, args, reply)
