@@ -40,7 +40,7 @@ func (e *etcdConn) announce(service string, stopChan chan bool) {
 		select {
 		case <-stopChan:
 			return
-		case <-time.After(time.Duration(e.ttl)*time.Second - 50*time.Millisecond):
+		case <-time.After(time.Duration(e.ttl)*time.Second - time.Second):
 			if err := e.register(service); err != nil {
 				logger.Warn.Printf("Error registering %s: %s", service, err)
 			}
