@@ -40,7 +40,7 @@ func (e *etcdConn) announce(service string, stopChan chan bool) {
 		select {
 		case <-stopChan:
 			return
-		case <-time.After(time.Duration(e.ttl)*time.Second - time.Second):
+		case <-time.After(time.Duration(e.ttl) * time.Second / 2):
 			if err := e.register(service); err != nil {
 				logger.Warn.Printf("Error registering %s: %s", service, err)
 			}
@@ -67,12 +67,20 @@ func (e *etcdConn) getAddr(service string) (addr string, err error) {
 // Registers the service with the appropriate TTL. To automatically re-
 // register the service before the TTL, use/ etcdConn.announce(service).
 func (e *etcdConn) register(service string) (err error) {
-	_, err = e.client.Set(filepath.Join(gobDir, service, e.machineName()), e.broadcast, e.ttl)
-	if err != nil {
-		logger.Error.Printf("Error registering %s: %s", service, err)
-		return
+	keys := []string{
+		filepath.Join(gobDir, service, e.machineName()),
+		filepath.Join(nodesDir, e.machineName()),
 	}
-	_, err = e.client.Set(filepath.Join(nodesDir, e.machineName()), e.broadcast, e.ttl)
+	for _, key := range keys {
+		if _, err := e.client.Update(key, e.broadcast, e.ttl); err != nil {
+			logger.Warn.Printf("Error updating %s: %s", service, err)
+		} else {
+			continue
+		}
+		if _, err := e.client.Set(key, e.broadcast, e.ttl); err != nil {
+			logger.Error.Printf("Error registering %s: %s", service, err)
+		}
+	}
 	return
 }
 
