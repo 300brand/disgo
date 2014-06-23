@@ -11,7 +11,7 @@ type Client struct {
 	conn *etcdConn
 }
 
-var retryIncrement = 100 * time.Millisecond
+var retryIncrement = 250 * time.Millisecond
 
 func NewClient(machineAddrs []string) (c *Client, err error) {
 	c = new(Client)
@@ -24,7 +24,7 @@ func (c *Client) Call(f string, args, reply interface{}) (err error) {
 	serviceName := f[:strings.IndexByte(f, '.')]
 
 	var addr string
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		if addr, err = c.conn.getAddr(serviceName); err == nil {
 			break
 		}
